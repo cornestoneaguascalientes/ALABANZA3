@@ -411,21 +411,26 @@
   // ============================================================
   function createHost(api) {
     const C = api.C;
-    let cfg = loadCfg(), sub = null, offChange = null, hb = null, trail = null, lastPush = 0, phoneAt = 0, relayOk = false, peer = null;
+    let cfg = loadCfg(), sub = null, offChange = null, hb = null, trail = null, lastPush = 0, phoneAt = 0, relayOk = false, peer = null, limitUntil = 0, limitStep = 0;
     let musicWantAt = 0, musicKey = '', musicTrail = null, musicLast = 0, musicTimer = null, musicQuietUntil = 0, sKey = '', retryT = null;
     const seen = new Set(), listeners = new Set();
     const T = () => topics(cfg.token);
 
     const isDirect = () => !!(peer && peer.open);
-    const status = () => ({ enabled: cfg.enabled, relay: relayOk, direct: isDirect(), phone: isDirect() || Date.now() - phoneAt < 150000, server: cfg.server });
+    const limited = () => !isDirect() && Date.now() < limitUntil;
+    const status = () => ({ enabled: cfg.enabled, relay: relayOk, direct: isDirect(), limited: limited(), phone: isDirect() || Date.now() - phoneAt < 150000, server: cfg.server });
     const emitStatus = () => listeners.forEach((fn) => { try { fn(status()); } catch (e) { /* noop */ } });
     const closePeer = (why) => { const p = peer; peer = null; if (p) p.close(why); };
     const send = (obj) => {
       if (isDirect() && peer.send(obj)) return Promise.resolve();          // canal directo: sin límites
-      return Relay.publish(cfg.server, T().st, obj).catch((e) => {
-        if (e && e.status === 429) {                                         // servicio ocupado: se vuelve a mandar el estado más reciente después
+      if (Date.now() < limitUntil) return Promise.resolve();               // ntfy nos está limitando: no se insiste (insistir alarga el bloqueo); al terminar la espera se manda el estado más reciente
+      return Relay.publish(cfg.server, T().st, obj).then(() => { limitStep = 0; }).catch((e) => {
+        if (e && e.status === 429) {
+          limitStep = Math.min(limitStep ? limitStep * 2 : 20000, 300000);   // espera creciente: 20 s, 40 s, 80 s … hasta 5 min
+          limitUntil = Date.now() + Math.max(limitStep, (e.retryAfter || 0) * 1000);
           clearTimeout(retryT);
-          retryT = setTimeout(() => { sKey = ''; musicKey = ''; push(true, true); pushMusic(true, true); }, Math.max(4000, (e.retryAfter || 0) * 1000));
+          retryT = setTimeout(() => { sKey = ''; musicKey = ''; push(true, true); pushMusic(true, true); emitStatus(); }, limitUntil - Date.now() + 500);
+          emitStatus();
           return;
         }
         relayOk = false; emitStatus();
@@ -474,7 +479,7 @@
 
     /** skipThrottle: no esperar el intervalo mínimo. always: mandarlo aunque no haya cambiado (saludo / latido) */
     function push(skipThrottle, always) {
-      if (!cfg.enabled) return;
+      if (!cfg.enabled || limited()) return;
       const now = Date.now();
       clearTimeout(trail);
       const wait = (isDirect() ? 150 : 1200) - (now - lastPush);      // directo: ~7 por segundo · ntfy: máximo uno cada ~1.2 s
@@ -489,7 +494,7 @@
     // Música: se publica solo mientras el celular tiene abierta la pestaña Música (avisa con m:1 en cada ping)
     const wantsMusic = () => Date.now() - musicWantAt < 150000;
     function pushMusic(skipThrottle, always) {
-      if (!cfg.enabled || !wantsMusic()) return;
+      if (!cfg.enabled || !wantsMusic() || limited()) return;
       clearTimeout(musicTrail);
       if (!always && Date.now() < musicQuietUntil) return;          // mientras mueves volúmenes no se contesta cada paso; el siguiente cambio lo manda
       const st = Music.state();
@@ -635,6 +640,7 @@
       const el = $('rm-status');
       if (!s.enabled) { el.textContent = '⏸ Desactivado'; el.style.color = ''; return; }
       if (s.direct) { el.textContent = '🟢 Celular conectado · directo ⚡ (sin límites)'; el.style.color = '#3fb950'; return; }
+      if (s.limited) { el.textContent = '⏳ ntfy está limitando los mensajes. Esperando a que se libere (no hace falta hacer nada)…'; el.style.color = '#ffb224'; return; }
       if (!s.relay) { el.textContent = '🔴 Sin conexión con el servicio de mensajes (revisa el internet de la computadora)'; el.style.color = '#ff6b6b'; return; }
       el.textContent = s.phone ? '🟢 Celular conectado · por el servicio de mensajes (respaldo)' : '🟡 Listo. Esperando que el celular escanee el código…';
       el.style.color = s.phone ? '#3fb950' : '';
