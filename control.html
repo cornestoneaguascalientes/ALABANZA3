@@ -174,7 +174,7 @@
       <p class="help">El sonido sale de la computadora. Si no suena, toca una vez cualquier parte de la página en la computadora (el navegador pide un toque antes de dejar sonar).</p>
     </div>
 
-    <p class="help" style="text-align:center;margin-top:18px"><a href="#" id="unpair" style="color:var(--muted)">Desemparejar este celular</a></p>
+    <p class="help" style="text-align:center;margin-top:18px"><a href="#" id="redirect" style="color:var(--muted)">⚡ Reintentar conexión directa</a> · <a href="#" id="unpair" style="color:var(--muted)">Desemparejar este celular</a></p>
   </div>
   <div id="toast"></div>
 
@@ -200,13 +200,18 @@
     var S = null, recvAt = 0, liveAt = 0, relayOk = false, tt = null;
     var MS = null, mRecv = 0, musicTab = false;
 
+    // ---- conexión directa (WebRTC). ntfy solo se usa para el saludo y como respaldo.
+    var peer = null, attempt = null, fails = 0, nextTryAt = 0;
+    var BACKOFF = [12000, 45000, 120000, 300000];                 // si no conecta, se reintenta cada vez más espaciado (cada intento gasta 2 mensajes de ntfy)
+    function isDirect() { return !!(peer && peer.open); }
+
     function toast(msg, err) {
       var t = $('toast'); t.textContent = msg; t.className = 'on' + (err ? ' err' : '');
       clearTimeout(tt); tt = setTimeout(function () { t.className = ''; }, err ? 4200 : 1800);
     }
     function buzz() { try { if (navigator.vibrate) navigator.vibrate(14); } catch (e) { /* noop */ } }
 
-    // Cola de envío: las órdenes salen en orden; si el servicio dice «demasiados mensajes» se reintentan solas (sin aviso rojo)
+    // Cola de envío (respaldo por ntfy): las órdenes salen en orden; si el servicio dice «demasiados mensajes» se reintentan solas (sin aviso rojo)
     var Q = [], busy = false, waiting = false;
     function setWaiting(on) { if (waiting !== on) { waiting = on; paintConn(); } }
     function pump() {
@@ -230,10 +235,13 @@
         pump();
       });
     }
-    /** opt.silent: aviso de fondo (no se reintenta ni avisa). opt.key: si ya hay uno igual esperando, se reemplaza por este (el más reciente gana) */
+    /** Si hay conexión directa, sale por ahí al instante (sin límites). Si no, por ntfy.
+     *  opt.silent: aviso de fondo (no se reintenta ni avisa). opt.key: si ya hay uno igual esperando (ntfy), se reemplaza por este (el más reciente gana) */
     function send(obj, opt) {
       opt = opt || {};
-      var it = { obj: Object.assign({ t: 'c', n: Math.random().toString(36).slice(2) }, obj), silent: !!opt.silent, key: opt.key || null, tries: 0 };
+      var msg = Object.assign({ t: 'c', n: Math.random().toString(36).slice(2) }, obj);
+      if (isDirect() && peer.send(msg)) return Promise.resolve(true);
+      var it = { obj: msg, silent: !!opt.silent, key: opt.key || null, tries: 0 };
       if (opt.silent && (busy || Q.length)) return Promise.resolve(false);
       if (it.key) { var i = -1; Q.forEach(function (x, j) { if (x.key === it.key && x !== Q[0]) i = j; }); if (i >= 0) { Q[i] = it; return Promise.resolve(true); } }
       Q.push(it); pump();
@@ -244,23 +252,70 @@
     // ---- recibir
     function onMsg(m, raw) {
       if (!m) return;
+      if (m.t === 'r') { onSignal(m, raw); return; }
       if (m.t === 'n') { toast(m.text, m.err); return; }
-      if (m.t === 'm') { MS = m; mRecv = Date.now(); liveAt = Date.now(); paintMusic(); return; }
+      if (m.t === 'm') { MS = m; mRecv = Date.now(); liveAt = Date.now(); paintMusic(); maybeDirect(); return; }
       if (m.t !== 's') return;
       S = m; recvAt = Date.now();
       if (raw && raw.time && Date.now() / 1000 - raw.time < 180) liveAt = Date.now();   // el último estado guardado puede ser viejo: solo cuenta si es reciente
       paint();
+      maybeDirect();
     }
     R.Relay.subscribe(cfg.server, T.st, 'latest', onMsg, function (ok) { relayOk = ok; paintConn(); });
     send({ a: 'hello', m: 0 }, { silent: true });
-    setInterval(function () { send({ a: 'ping', m: musicTab ? 1 : 0 }, { silent: true }); }, 60000);   // un aviso por minuto (el servicio gratuito limita los mensajes)
-    setInterval(paintConn, 3000);
+    setInterval(function () { send({ a: 'ping', m: musicTab ? 1 : 0 }, { silent: true }); }, 60000);   // un aviso por minuto (por ntfy; si hay canal directo sale por ahí)
+    setInterval(function () { if (isDirect()) peer.send({ t: 'c', a: 'ping', m: musicTab ? 1 : 0 }); }, 4000);   // latido del canal directo: así se detecta pronto si se cae
+    setInterval(function () { paintConn(); maybeDirect(); }, 3000);
+
+    // ============ Conexión directa ============
+    /** La computadora contestó la oferta (por ntfy) */
+    function onSignal(m, raw) {
+      if (m.k !== 'answer' || !attempt || attempt.answered || m.id !== attempt.id || typeof m.sdp !== 'string') return;
+      if (raw && raw.time && Date.now() / 1000 - raw.time > 60) return;
+      attempt.answered = true;
+      var p = attempt.peer;
+      R.Direct.acceptAnswer(p, m.sdp).catch(function () { p.close('respuesta inválida'); });
+    }
+    /** Intenta abrir el canal directo si hay computadora a la vista y no hay uno en curso (con pausas crecientes entre fallos) */
+    function maybeDirect() {
+      if (!R.Direct || !R.Direct.supported() || isDirect() || attempt || !relayOk) return;
+      if (Date.now() - liveAt > 180000 || Date.now() < nextTryAt) return;      // sin computadora a la vista o en pausa
+      startDirect();
+    }
+    function startDirect() {
+      var id = Math.random().toString(36).slice(2, 10);
+      var p = R.Direct.createPeer('phone', {
+        onOpen: function () {
+          fails = 0; liveAt = Date.now();
+          Q.splice(0).forEach(function (it) { p.send(it.obj); });             // lo que estaba esperando en la cola sale ya por el canal
+          p.send({ t: 'c', a: 'hello', m: musicTab ? 1 : 0 });
+          paintConn(); toast('⚡ Conexión directa');
+        },
+        onMsg: function (m) { liveAt = Date.now(); onMsg(m, null); },
+        onClose: function (why, wasOpen) {
+          if (peer === p) peer = null;
+          if (attempt && attempt.peer === p) attempt = null;
+          if (wasOpen) { fails = 0; nextTryAt = Date.now() + 3000; if (S) send({ a: 'hello', m: musicTab ? 1 : 0 }, { silent: true }); }   // se cayó: se sigue por ntfy y se reintenta pronto
+          else { fails++; nextTryAt = Date.now() + BACKOFF[Math.min(fails, BACKOFF.length) - 1]; }
+          paintConn();
+        }
+      });
+      attempt = { id: id, peer: p, answered: false }; peer = p;
+      R.Direct.makeOffer(p).then(function (sdp) {
+        if (!attempt || attempt.peer !== p) return;
+        var base = { t: 'r', k: 'offer', id: id }, fit = R.Direct.fit(sdp, base);
+        if (!fit) throw new Error('sdp grande');
+        return R.Relay.publish(cfg.server, T.cmd, Object.assign({ sdp: fit }, base));
+      }).catch(function () { p.close('no se pudo mandar la oferta'); });
+      paintConn();
+    }
 
     function paintConn() {
       var live = Date.now() - liveAt < 150000, dot = $('dot'), c = $('conn');
-      if (!relayOk) { dot.className = 'dot bad'; c.textContent = 'Sin internet o sin servicio de mensajes'; }
+      if (isDirect()) { dot.className = 'dot ok'; c.textContent = 'Conectado directo ⚡'; }
+      else if (!relayOk) { dot.className = 'dot bad'; c.textContent = 'Sin internet o sin servicio de mensajes'; }
       else if (waiting) { dot.className = 'dot warn'; c.textContent = 'Servicio ocupado, reintentando…'; }
-      else if (live) { dot.className = 'dot ok'; c.textContent = 'Conectado a la computadora'; }
+      else if (live) { dot.className = 'dot ok'; c.textContent = 'Conectado (respaldo)' + (attempt ? ' · probando directo…' : ''); }
       else { dot.className = 'dot warn'; c.textContent = 'Esperando a la computadora…'; }
       $('outs').textContent = S && S.ok ? '🖥 ' + S.ok : '';
     }
@@ -318,9 +373,9 @@
     // ============ Música (secuencia, pad, metrónomo) ============
     var drag = {}, sendT = {}, sendAt = {}, seeking = false, mixSig = '', bpmLocal = null, bpmT = null, KEYS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
     var fmtT = function (s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-    // los deslizadores mandan como máximo un mensaje cada ~350 ms (el servicio de mensajes limita cuántos se pueden enviar)
+    // los deslizadores mandan como máximo un mensaje cada ~70 ms por el canal directo, o cada ~1 s por ntfy (el servicio de mensajes limita cuántos se pueden enviar)
     function slideSend(key, obj) {
-      var now = Date.now(), wait = 1000 - (now - (sendAt[key] || 0));
+      var now = Date.now(), wait = (isDirect() ? 70 : 1000) - (now - (sendAt[key] || 0));
       clearTimeout(sendT[key]);
       if (wait <= 0) { sendAt[key] = now; send(obj, { key: key }); } else sendT[key] = setTimeout(function () { sendAt[key] = Date.now(); send(obj, { key: key }); }, wait);
     }
@@ -441,12 +496,26 @@
       musicTab = b.dataset.p === 'musica';
       if (musicTab) send({ a: 'm.sync', m: 1 }, { silent: true });
     });
+    $('redirect').onclick = function (e) {
+      e.preventDefault();
+      if (!R.Direct || !R.Direct.supported()) { toast('Este navegador no permite conexión directa', true); return; }
+      if (isDirect()) { toast('Ya estás conectado directo ⚡'); return; }
+      if (attempt) { toast('Ya se está intentando…'); return; }
+      if (!relayOk) { toast('Sin internet o sin servicio de mensajes', true); return; }
+      fails = 0; nextTryAt = 0; startDirect(); toast('Probando conexión directa…');
+    };
     $('unpair').onclick = function (e) { e.preventDefault(); if (confirm('¿Desemparejar este celular?')) { try { localStorage.removeItem(KEY); } catch (x) { /* noop */ } location.reload(); } };
 
     // ---- que la pantalla del celular no se apague mientras controlas
     var lock = null;
     function wake() { try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { lock = l; }).catch(function () {}); } catch (e) { /* noop */ } }
-    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { wake(); send({ a: 'hello', m: musicTab ? 1 : 0 }, { silent: true }); } });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        wake();
+        if (!isDirect()) { nextTryAt = 0; fails = Math.min(fails, 1); }          // al volver a la app se reintenta el canal directo sin esperar
+        send({ a: 'hello', m: musicTab ? 1 : 0 }, { silent: true });
+      }
+    });
     document.addEventListener('click', function once() { wake(); document.removeEventListener('click', once); });
   })();
   </script>
