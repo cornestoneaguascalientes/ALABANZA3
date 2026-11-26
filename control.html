@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Alabanza · Control remoto</title>
+  <link rel="icon" href="logo_app.jpg">
+  <link rel="apple-touch-icon" href="logo_app.jpg">
+  <style>
+    :root { --bg: #000; --s1: #121214; --s2: #1c1c20; --line: #2a2a30; --fg: #f4f4f5; --muted: #9a9aa3; --red: #e5484d; --green: #3fb950; --amber: #ffb224; --blue: #6e9bff; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; touch-action: manipulation; }
+    body { min-height: 100vh; padding: env(safe-area-inset-top) env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + 24px) env(safe-area-inset-left); max-width: 640px; margin: 0 auto; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; width: 100%; min-height: 46px; }
+    .top { display: flex; align-items: center; gap: 8px; padding: 12px 14px 6px; font-size: 13px; color: var(--muted); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #666; flex: none; }
+    .dot.ok { background: var(--green); } .dot.warn { background: var(--amber); } .dot.bad { background: var(--red); }
+    .top .grow { flex: 1; }
+    .card { margin: 8px 12px; padding: 12px 14px; background: var(--s1); border: 1px solid var(--line); border-radius: 16px; }
+    .card.live { border-color: var(--red); box-shadow: inset 4px 0 0 var(--red); }
+    .lab { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+    .chip { padding: 2px 8px; border-radius: 6px; background: var(--s2); color: #fff; border-left: 4px solid var(--c, #666); }
+    .txt { white-space: pre-line; font-size: 20px; font-weight: 600; max-height: 26vh; overflow: auto; overflow-wrap: anywhere; }
+    .txt.small { font-size: 15px; font-weight: 500; color: var(--muted); max-height: 12vh; }
+    .empty { color: var(--muted); font-style: italic; }
+    .nav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 12px; }
+    .big { min-height: 92px; border: 0; border-radius: 18px; font-size: 22px; font-weight: 800; background: var(--s2); }
+    .big.go { background: #fff; color: #000; }
+    .big:active { transform: scale(.98); filter: brightness(.85); }
+    .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 8px 12px; }
+    .tog { min-height: 54px; border: 1px solid var(--line); border-radius: 14px; background: var(--s1); font-weight: 700; }
+    .tog.on { background: var(--red); border-color: var(--red); color: #fff; }
+    .tabs { display: flex; gap: 6px; padding: 10px 12px 0; overflow-x: auto; }
+    .tab { flex: 1; min-width: 74px; min-height: 44px; border: 1px solid var(--line); border-radius: 12px; background: transparent; color: var(--muted); font-weight: 700; font-size: 14px; }
+    .tab.on { background: #fff; color: #000; border-color: #fff; }
+    .panel { display: none; padding: 10px 12px; }
+    .panel.on { display: block; }
+    .btn { min-height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--s2); font-weight: 700; }
+    .btn.primary { background: #fff; color: #000; border-color: #fff; }
+    .btn.danger { color: #ff6b6b; }
+    .btn.block { width: 100%; margin-top: 8px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    .items { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    .it { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); width: 100%; text-align: left; }
+    .it.cur { border-color: var(--red); box-shadow: inset 4px 0 0 var(--red); }
+    .it .ty { width: 26px; text-align: center; font-size: 18px; flex: none; }
+    .it .tt { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .it .nn { font-size: 12px; color: var(--muted); }
+    .chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; margin-top: 8px; }
+    .sl { min-height: 52px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--s1); font-size: 12px; text-align: left; overflow: hidden; }
+    .sl.cur { border-color: var(--red); background: var(--s2); }
+    .sl b { display: block; color: var(--muted); font-size: 11px; }
+    h4 { margin: 14px 0 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    .help { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+    .cdbig { font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: center; padding: 6px 0; }
+    .quick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    #toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 18px); transform: translateX(-50%); max-width: 90vw; padding: 10px 16px; border-radius: 999px; background: #222; border: 1px solid var(--line); font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 9; text-align: center; }
+    #toast.on { opacity: 1; } #toast.err { background: #5b1a1d; border-color: var(--red); }
+    #unpaired { display: none; padding: 40px 24px; text-align: center; }
+    #unpaired h2 { margin: 0 0 10px; }
+    .sel { width: 100%; min-height: 50px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--s2); color: var(--fg); font: inherit; font-weight: 600; }
+    .trans { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .trans .btn { min-height: 62px; font-size: 24px; }
+    .trans .btn.on { background: #fff; color: #000; border-color: #fff; }
+    .seekrow { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+    .seekrow span { min-width: 86px; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--muted); }
+    input[type=range] { width: 100%; min-height: 34px; padding: 0; background: transparent; border: 0; accent-color: #fff; }
+    .mline { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-top: 12px; }
+    .mline b { font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mline small { color: var(--amber); white-space: nowrap; }
+    .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+    .seg .btn.on { background: #fff; color: #000; border-color: #fff; }
+    .ch { display: grid; grid-template-columns: 74px 1fr 42px 42px; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+    .ch.silent { opacity: .45; }
+    .ch .nm { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ch .nm small { display: block; color: var(--muted); font-weight: 500; font-size: 11px; }
+    .ch button { min-height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--s2); font-weight: 800; }
+    .ch button.on.m { background: var(--red); border-color: var(--red); }
+    .ch button.on.s { background: var(--amber); border-color: var(--amber); color: #000; }
+    .keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 8px; }
+    .keys .btn { min-height: 44px; padding: 0; }
+    .keys .btn.on { background: #fff; color: #000; border-color: #fff; }
+    .bpmrow { display: grid; grid-template-columns: 1fr 1fr 1.4fr 1fr 1fr; gap: 6px; margin-top: 8px; align-items: center; }
+    .bpmrow .bv { text-align: center; font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .stagebox { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--green); border-radius: 12px; }
+  </style>
+</head>
+<body>
+  <div id="unpaired">
+    <h2>📱 Control remoto</h2>
+    <p>Este celular todavía no está emparejado.</p>
+    <p class="help">En la computadora abre la app, entra a <b>Proyección</b> y toca <b>«📱 Control remoto»</b>. Escanea el código QR con la cámara de este celular.</p>
+  </div>
+
+  <div id="app" hidden>
+    <div class="top"><span class="dot" id="dot"></span><span id="conn" class="grow">Conectando…</span><span id="outs"></span></div>
+
+    <div class="card live"><div class="lab"><span>En pantalla</span><span class="chip" id="live-chip" hidden></span><span id="live-it"></span></div>
+      <div class="txt" id="live-txt"><span class="empty">Nada proyectado</span></div></div>
+    <div class="card"><div class="lab"><span>Siguiente</span></div><div class="txt small" id="next-txt"><span class="empty">—</span></div></div>
+
+    <div class="nav"><button class="big" id="b-prev" type="button">◀ Anterior</button><button class="big go" id="b-next" type="button">Siguiente ▶</button></div>
+    <div class="row">
+      <button class="tog" id="t-black" type="button">Negro</button>
+      <button class="tog" id="t-logo" type="button">Logo</button>
+      <button class="tog" id="t-clear" type="button">Limpiar texto</button>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button class="tab on" data-p="orden" type="button">Orden</button>
+      <button class="tab" data-p="biblia" type="button">Biblia</button>
+      <button class="tab" data-p="cuenta" type="button">Cuenta</button>
+      <button class="tab" data-p="escenario" type="button">Escenario</button>
+      <button class="tab" data-p="musica" type="button">Música</button>
+    </div>
+
+    <div class="panel on" id="p-orden">
+      <div class="two"><button class="btn" id="b-pitem" type="button">⏮ Elemento anterior</button><button class="btn" id="b-nitem" type="button">Elemento siguiente ⏭</button></div>
+      <ul class="items" id="items"></ul>
+      <h4 id="sl-h" hidden>Diapositivas del elemento</h4>
+      <div class="chips" id="slides"></div>
+    </div>
+
+    <div class="panel" id="p-biblia">
+      <input id="bq" type="text" placeholder="Ej. Juan 3:16  ·  Sal 23 1-4" autocomplete="off" autocapitalize="off" enterkeyhint="go">
+      <div class="two"><button class="btn" id="b-bstage" type="button">👁 Ver previa</button><button class="btn primary" id="b-bgo" type="button">Proyectar</button></div>
+      <div class="stagebox" id="stagebox" hidden><div class="lab" id="stage-t"></div><div class="txt small" id="stage-x"></div>
+        <button class="btn primary block" id="b-bproj" type="button">Proyectar esta previa</button></div>
+      <button class="btn block" id="b-bmore" type="button">+ Más versículos (los siguientes 5)</button>
+      <p class="help">«Ver previa» solo la muestra en la computadora para que la revises; «Proyectar» la manda a la pantalla.</p>
+    </div>
+
+    <div class="panel" id="p-cuenta">
+      <div class="cdbig" id="cd-big">--:--</div>
+      <div class="two"><input id="cd-min" type="number" min="0" max="600" step="1" value="5" inputmode="numeric"><input id="cd-label" type="text" value="Empezamos en"></div>
+      <div class="quick"><button class="btn" data-m="1" type="button">1 min</button><button class="btn" data-m="3" type="button">3 min</button><button class="btn" data-m="5" type="button">5 min</button><button class="btn" data-m="10" type="button">10 min</button></div>
+      <div class="two"><button class="btn primary" id="b-cdgo" type="button">▶ Iniciar</button><button class="btn danger" id="b-cdstop" type="button">■ Detener</button></div>
+    </div>
+
+    <div class="panel" id="p-escenario">
+      <p class="help" style="margin-top:0">Mensaje para los músicos (aparece en la vista de escenario).</p>
+      <input id="sm" type="text" maxlength="200" placeholder="Escribe un mensaje…" autocomplete="off">
+      <div class="two"><button class="btn primary" id="b-smgo" type="button">Enviar</button><button class="btn danger" id="b-smclr" type="button">Quitar</button></div>
+      <div class="quick" id="smq"><button class="btn" type="button">Una más</button><button class="btn" type="button">Repetir coro</button><button class="btn" type="button">Bajar volumen</button><button class="btn" type="button">Final</button></div>
+      <p class="help" id="sm-now"></p>
+    </div>
+
+    <div class="panel" id="p-musica">
+      <p class="help" id="m-none" style="margin-top:0">Esperando datos de música de la computadora…</p>
+      <h4 style="margin-top:2px">Secuencia</h4>
+      <select class="sel" id="m-song"></select>
+      <div class="mline"><b id="m-title">—</b><small id="m-tone"></small></div>
+      <p class="help" id="m-msg" style="margin-top:2px"></p>
+      <div class="trans"><button class="btn" id="m-play" type="button">▶</button><button class="btn" id="m-pause" type="button">⏸</button><button class="btn" id="m-stop" type="button">■</button></div>
+      <div class="seekrow"><span id="m-time">0:00 / 0:00</span><input type="range" id="m-seek" min="0" max="1000" value="0"></div>
+      <div class="two"><button class="btn" id="m-pd" type="button">Tono −1</button><button class="btn" id="m-pu" type="button">Tono +1</button></div>
+      <div class="seg" id="m-mode"><button class="btn" data-mode="stereo" type="button">Estéreo</button><button class="btn" data-mode="split" type="button">Split L/R</button></div>
+      <h4>Mezcla</h4>
+      <div id="m-mixer"><p class="help">Carga una canción para ver sus pistas.</p></div>
+
+      <h4>Pad</h4>
+      <div class="two"><button class="btn" id="pad-toggle" type="button">▶ Pad</button><input type="range" id="pad-vol" min="0" max="100" value="50" aria-label="Volumen del pad"></div>
+      <div class="keys" id="pad-keys"></div>
+
+      <h4>Metrónomo</h4>
+      <div class="bpmrow"><button class="btn" id="bpm-m5" type="button">−5</button><button class="btn" id="bpm-m1" type="button">−1</button><div class="bv" id="bpm-v">120</div><button class="btn" id="bpm-p1" type="button">+1</button><button class="btn" id="bpm-p5" type="button">+5</button></div>
+      <div class="two"><button class="btn" id="met-toggle" type="button">▶ Metrónomo</button><button class="btn" id="met-tap" type="button">Tap tempo</button></div>
+      <div class="seekrow"><span>Volumen</span><input type="range" id="met-vol" min="0" max="100" value="70" aria-label="Volumen del metrónomo"></div>
+      <p class="help">El sonido sale de la computadora. Si no suena, toca una vez cualquier parte de la página en la computadora (el navegador pide un toque antes de dejar sonar).</p>
+    </div>
+
+    <p class="help" style="text-align:center;margin-top:18px"><a href="#" id="unpair" style="color:var(--muted)">Desemparejar este celular</a></p>
+  </div>
+  <div id="toast"></div>
+
+  <script src="proy-remote.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    var R = window.Proy.Remote;
+    var $ = function (id) { return document.getElementById(id); };
+    var KEY = 'alabanza.remote.phone';
+
+    // ---- emparejamiento: el código viaja en el # del enlace del QR; se guarda y se borra de la barra
+    var cfg = null, hp = new URLSearchParams(location.hash.slice(1));
+    if (hp.get('t')) {
+      cfg = { token: hp.get('t'), server: hp.get('s') || R.DEFAULT_SERVER };
+      try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) { /* noop */ }
+      history.replaceState(null, '', location.pathname);
+    } else { try { cfg = JSON.parse(localStorage.getItem(KEY)); } catch (e) { cfg = null; } }
+    if (!cfg || !/^[\w-]{10,64}$/.test(cfg.token || '')) { $('unpaired').style.display = 'block'; return; }
+    $('app').hidden = false;
+
+    var T = R.topics(cfg.token);
+    var S = null, recvAt = 0, liveAt = 0, relayOk = false, tt = null;
+    var MS = null, mRecv = 0, musicTab = false;
+
+    function toast(msg, err) {
+      var t = $('toast'); t.textContent = msg; t.className = 'on' + (err ? ' err' : '');
+      clearTimeout(tt); tt = setTimeout(function () { t.className = ''; }, err ? 4200 : 1800);
+    }
+    function buzz() { try { if (navigator.vibrate) navigator.vibrate(14); } catch (e) { /* noop */ } }
+
+    function send(obj) {
+      return R.Relay.publish(cfg.server, T.cmd, Object.assign({ t: 'c', n: Math.random().toString(36).slice(2) }, obj))
+        .then(function () { return true; })
+        .catch(function (e) { toast(e && e.status === 429 ? 'Demasiados mensajes seguidos. Espera unos segundos.' : 'No se pudo enviar. ¿Tienes internet?', true); return false; });
+    }
+    function cmd(obj) { buzz(); return send(obj); }
+
+    // ---- recibir
+    function onMsg(m, raw) {
+      if (!m) return;
+      if (m.t === 'n') { toast(m.text, m.err); return; }
+      if (m.t === 'm') { MS = m; mRecv = Date.now(); liveAt = Date.now(); paintMusic(); return; }
+      if (m.t !== 's') return;
+      S = m; recvAt = Date.now();
+      if (raw && raw.time && Date.now() / 1000 - raw.time < 90) liveAt = Date.now();   // el último estado guardado puede ser viejo: solo cuenta si es reciente
+      paint();
+    }
+    R.Relay.subscribe(cfg.server, T.st, 'latest', onMsg, function (ok) { relayOk = ok; paintConn(); });
+    send({ a: 'hello', m: 0 });
+    setInterval(function () { send({ a: 'ping', m: musicTab ? 1 : 0 }); }, 20000);
+    setInterval(paintConn, 3000);
+
+    function paintConn() {
+      var live = Date.now() - liveAt < 60000, dot = $('dot'), c = $('conn');
+      if (!relayOk) { dot.className = 'dot bad'; c.textContent = 'Sin internet o sin servicio de mensajes'; }
+      else if (live) { dot.className = 'dot ok'; c.textContent = 'Conectado a la computadora'; }
+      else { dot.className = 'dot warn'; c.textContent = 'Esperando a la computadora…'; }
+      $('outs').textContent = S && S.ok ? '🖥 ' + S.ok : '';
+    }
+
+    function setText(el, text, ph) { el.textContent = ''; if (text) el.textContent = text; else { var s = document.createElement('span'); s.className = 'empty'; s.textContent = ph; el.appendChild(s); } }
+
+    function paint() {
+      paintConn();
+      var s = S; if (!s) return;
+      var chip = $('live-chip');
+      if (s.live && (s.live.l || s.live.p)) { chip.hidden = false; chip.textContent = (s.live.l || '') + (s.live.p ? ' ' + s.live.p : ''); chip.style.setProperty('--c', s.live.c || '#666'); } else chip.hidden = true;
+      $('live-it').textContent = (s.mode === 'quick' ? 'Cita rápida' : s.it || '') + (s.pos ? ' · ' + s.pos[2] + '/' + s.pos[3] : '');
+      setText($('live-txt'), s.live && s.live.x, 'Nada proyectado');
+      setText($('next-txt'), s.nx, '—');
+      $('t-black').classList.toggle('on', !!(s.f && s.f[0]));
+      $('t-clear').classList.toggle('on', !!(s.f && s.f[1]));
+      $('t-logo').classList.toggle('on', !!(s.f && s.f[2]));
+
+      // orden
+      var ul = $('items'); ul.textContent = '';
+      var icons = { s: '♪', b: '📖', t: '📝', m: '🖼', c: '⏱' };
+      (s.list || []).forEach(function (it, i) {
+        var li = document.createElement('li'), b = document.createElement('button');
+        b.type = 'button'; b.className = 'it' + (s.cur && s.cur[0] === i ? ' cur' : '');
+        var ty = document.createElement('span'); ty.className = 'ty'; ty.textContent = icons[it[1]] || '•';
+        var t = document.createElement('span'); t.className = 'tt'; t.textContent = it[0];
+        var n = document.createElement('span'); n.className = 'nn'; n.textContent = it[2] + ' diap.';
+        b.appendChild(ty); b.appendChild(t); b.appendChild(n);
+        b.onclick = function () { cmd({ a: 'go', i: i, j: 0 }); };
+        li.appendChild(b); ul.appendChild(li);
+      });
+      if (!(s.list || []).length) { var e = document.createElement('li'); e.className = 'help'; e.textContent = 'No hay elementos en el orden del servicio de la computadora.'; ul.appendChild(e); }
+      var ch = $('slides'); ch.textContent = ''; $('sl-h').hidden = !(s.sl && s.sl.length && s.cur);
+      if (s.cur) (s.sl || []).forEach(function (x, j) {
+        var b = document.createElement('button'); b.type = 'button'; b.className = 'sl' + (s.cur[1] === j ? ' cur' : '');
+        var n = document.createElement('b'); n.textContent = (j + 1); b.appendChild(n); b.appendChild(document.createTextNode(x));
+        b.onclick = function () { cmd({ a: 'go', i: s.cur[0], j: j }); };
+        ch.appendChild(b);
+      });
+
+      // previa de la Biblia
+      $('stagebox').hidden = !s.st;
+      if (s.st) { $('stage-t').textContent = 'Previa · ' + s.st.t + (s.st.n > 1 ? ' (' + s.st.n + ' diap.)' : ''); $('stage-x').textContent = s.st.x; }
+      $('sm-now').textContent = s.sm ? 'Mostrando: «' + s.sm + '»' : '';
+    }
+
+    // ---- cuenta regresiva (se calcula localmente a partir de lo que falta al recibir el estado)
+    setInterval(function () {
+      var el = $('cd-big');
+      if (!S || !S.cd) { el.textContent = '--:--'; return; }
+      var rem = Math.max(0, Math.ceil((S.cd.r - (Date.now() - recvAt)) / 1000));
+      el.textContent = String(Math.floor(rem / 60)).padStart(2, '0') + ':' + String(rem % 60).padStart(2, '0');
+    }, 250);
+
+    // ============ Música (secuencia, pad, metrónomo) ============
+    var drag = {}, sendT = {}, sendAt = {}, seeking = false, mixSig = '', bpmLocal = null, bpmT = null, KEYS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+    var fmtT = function (s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+    // los deslizadores mandan como máximo un mensaje cada ~350 ms (el servicio de mensajes limita cuántos se pueden enviar)
+    function slideSend(key, obj) {
+      var now = Date.now(), wait = 350 - (now - (sendAt[key] || 0));
+      clearTimeout(sendT[key]);
+      if (wait <= 0) { sendAt[key] = now; send(obj); } else sendT[key] = setTimeout(function () { sendAt[key] = Date.now(); send(obj); }, wait);
+    }
+    function slideEnd(key, obj, id) { clearTimeout(sendT[key]); sendAt[key] = Date.now(); send(obj); setTimeout(function () { delete drag[id || key]; }, 1500); }
+
+    function paintMusic() {
+      var s = MS; if (!s) return;
+      var M = s.mt;
+      $('m-none').hidden = !!(M || s.pad || s.met);
+      if (M) {
+        var sel = $('m-song'), sig = JSON.stringify(M.list);
+        if (sel.dataset.sig !== sig) {
+          sel.dataset.sig = sig; sel.textContent = '';
+          var o0 = document.createElement('option'); o0.value = ''; o0.textContent = M.list.length ? 'Elige una canción…' : 'No hay secuencias configuradas'; sel.appendChild(o0);
+          M.list.forEach(function (x) { var o = document.createElement('option'); o.value = x[0]; o.textContent = x[1]; sel.appendChild(o); });
+        }
+        sel.value = M.id || '';
+        $('m-title').textContent = M.title || '—';
+        $('m-tone').textContent = M.tone || '';
+        $('m-msg').textContent = M.ready ? '' : (M.msg || M.badge || '');
+        $('m-play').classList.toggle('on', !!M.playing);
+        [].forEach.call(document.querySelectorAll('#m-mode [data-mode]'), function (b) { b.classList.toggle('on', b.dataset.mode === M.mode); });
+        // mezcla: se redibuja solo si cambian las pistas; si no, solo se actualizan valores
+        var sg = M.tr.map(function (t) { return t[0] + t[1]; }).join('|'), mx = $('m-mixer');
+        if (sg !== mixSig) {
+          mixSig = sg; mx.textContent = '';
+          if (!M.tr.length) { var p = document.createElement('p'); p.className = 'help'; p.textContent = 'Carga una canción para ver sus pistas.'; mx.appendChild(p); }
+          M.tr.forEach(function (t) {
+            var row = document.createElement('div'); row.className = 'ch'; row.dataset.id = t[0];
+            var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = t[1]; var sm = document.createElement('small'); sm.textContent = t[2]; nm.appendChild(sm);
+            var rg = document.createElement('input'); rg.type = 'range'; rg.min = 0; rg.max = 100; rg.setAttribute('aria-label', 'Volumen de ' + t[1]);
+            var mb = document.createElement('button'); mb.type = 'button'; mb.className = 'm'; mb.textContent = 'M';
+            var sb = document.createElement('button'); sb.type = 'button'; sb.className = 's'; sb.textContent = 'S';
+            rg.addEventListener('pointerdown', function () { drag[t[0]] = 1; });
+            rg.addEventListener('input', function () { drag[t[0]] = 1; slideSend('v' + t[0], { a: 'mt.vol', id: t[0], v: Number(rg.value) }); });
+            rg.addEventListener('change', function () { slideEnd('v' + t[0], { a: 'mt.vol', id: t[0], v: Number(rg.value) }, t[0]); });
+            mb.onclick = function () { cmd({ a: 'mt.mute', id: t[0] }); };
+            sb.onclick = function () { cmd({ a: 'mt.solo', id: t[0] }); };
+            row.appendChild(nm); row.appendChild(rg); row.appendChild(mb); row.appendChild(sb); mx.appendChild(row);
+          });
+        }
+        var anySolo = M.tr.some(function (t) { return t[5]; });
+        M.tr.forEach(function (t) {
+          var row = mx.querySelector('[data-id="' + t[0] + '"]'); if (!row) return;
+          if (!drag[t[0]]) row.querySelector('input').value = t[3];
+          row.querySelector('.m').classList.toggle('on', !!t[4]); row.querySelector('.s').classList.toggle('on', !!t[5]);
+          row.classList.toggle('silent', anySolo ? !t[5] : !!t[4]);
+        });
+      }
+      if (s.pad) {
+        $('pad-toggle').classList.toggle('on', !!s.pad.on); $('pad-toggle').textContent = (s.pad.on ? '■ Pad ' : '▶ Pad ') + s.pad.tone;
+        if (!drag.pad) $('pad-vol').value = s.pad.vol;
+        [].forEach.call(document.querySelectorAll('#pad-keys .btn'), function (b) { b.classList.toggle('on', b.dataset.k === s.pad.tone); });
+      }
+      if (s.met) {
+        $('met-toggle').classList.toggle('on', !!s.met.on); $('met-toggle').textContent = s.met.on ? '■ Metrónomo' : '▶ Metrónomo';
+        if (bpmLocal === null) $('bpm-v').textContent = s.met.bpm;
+        if (!drag.met) $('met-vol').value = s.met.vol;
+      }
+    }
+    setInterval(function () {                                   // el tiempo corre aquí mismo entre un mensaje y otro
+      var M = MS && MS.mt; if (!M) return;
+      var pos = M.pos + (M.playing ? (Date.now() - mRecv) / 1000 : 0); pos = Math.min(pos, M.dur || pos);
+      $('m-time').textContent = fmtT(pos) + ' / ' + fmtT(M.dur);
+      if (!seeking) $('m-seek').value = M.dur ? Math.round(pos / M.dur * 1000) : 0;
+    }, 250);
+
+    $('m-song').onchange = function (e) { if (e.target.value) cmd({ a: 'mt.load', id: e.target.value }); };
+    $('m-play').onclick = function () { cmd({ a: 'mt.play' }); };
+    $('m-pause').onclick = function () { cmd({ a: 'mt.pause' }); };
+    $('m-stop').onclick = function () { cmd({ a: 'mt.stop' }); };
+    $('m-pd').onclick = function () { cmd({ a: 'mt.pitch', d: -1 }); };
+    $('m-pu').onclick = function () { cmd({ a: 'mt.pitch', d: 1 }); };
+    $('m-mode').addEventListener('click', function (e) { var b = e.target.closest('[data-mode]'); if (b) cmd({ a: 'mt.mode', mode: b.dataset.mode }); });
+    $('m-seek').addEventListener('pointerdown', function () { seeking = true; });
+    $('m-seek').addEventListener('change', function (e) { cmd({ a: 'mt.seek', f: Number(e.target.value) / 1000 }); setTimeout(function () { seeking = false; }, 600); });
+    $('pad-toggle').onclick = function () { cmd({ a: 'pad.toggle' }); };
+    KEYS.forEach(function (k) { var b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.dataset.k = k; b.textContent = k; b.onclick = function () { cmd({ a: 'pad.tone', tone: k }); }; $('pad-keys').appendChild(b); });
+    $('pad-vol').addEventListener('input', function (e) { drag.pad = 1; slideSend('pv', { a: 'pad.vol', v: Number(e.target.value) }); });
+    $('pad-vol').addEventListener('change', function (e) { slideEnd('pv', { a: 'pad.vol', v: Number(e.target.value) }, 'pad'); });
+    $('met-toggle').onclick = function () { cmd({ a: 'met.toggle' }); };
+    $('met-tap').onclick = function () { cmd({ a: 'met.tap' }); };
+    $('met-vol').addEventListener('input', function (e) { drag.met = 1; slideSend('mv', { a: 'met.vol', v: Number(e.target.value) }); });
+    $('met-vol').addEventListener('change', function (e) { slideEnd('mv', { a: 'met.vol', v: Number(e.target.value) }, 'met'); });
+    function bpmStep(d) {                                       // se muestra al instante y se manda una sola vez al dejar de tocar
+      buzz();
+      var cur = bpmLocal !== null ? bpmLocal : (MS && MS.met ? MS.met.bpm : 120);
+      bpmLocal = Math.max(40, Math.min(240, cur + d)); $('bpm-v').textContent = bpmLocal;
+      clearTimeout(bpmT); bpmT = setTimeout(function () { send({ a: 'met.bpm', v: bpmLocal }); setTimeout(function () { bpmLocal = null; }, 1500); }, 450);
+    }
+    $('bpm-m5').onclick = function () { bpmStep(-5); }; $('bpm-m1').onclick = function () { bpmStep(-1); };
+    $('bpm-p1').onclick = function () { bpmStep(1); }; $('bpm-p5').onclick = function () { bpmStep(5); };
+
+    // ---- botones
+    $('b-next').onclick = function () { cmd({ a: 'next' }); };
+    $('b-prev').onclick = function () { cmd({ a: 'prev' }); };
+    $('t-black').onclick = function () { cmd({ a: 'black' }); };
+    $('t-logo').onclick = function () { cmd({ a: 'logo' }); };
+    $('t-clear').onclick = function () { cmd({ a: 'clear' }); };
+    $('b-nitem').onclick = function () { cmd({ a: 'nextItem' }); };
+    $('b-pitem').onclick = function () { cmd({ a: 'prevItem' }); };
+    function bible(mode) { var q = $('bq').value.trim(); if (!q) { toast('Escribe una cita, por ejemplo Juan 3:16', true); return; } cmd({ a: 'bible', q: q, mode: mode }); }
+    $('b-bstage').onclick = function () { bible('stage'); };
+    $('b-bgo').onclick = function () { bible('project'); };
+    $('b-bproj').onclick = function () { bible('project'); };
+    $('bq').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); bible('stage'); } });
+    $('b-bmore').onclick = function () { cmd({ a: 'bibleMore' }); };
+    [].forEach.call(document.querySelectorAll('#p-cuenta [data-m]'), function (b) { b.onclick = function () { $('cd-min').value = b.dataset.m; }; });
+    $('b-cdgo').onclick = function () { cmd({ a: 'cdStart', min: Number($('cd-min').value) || 0, label: $('cd-label').value }); };
+    $('b-cdstop').onclick = function () { cmd({ a: 'cdStop' }); };
+    $('b-smgo').onclick = function () { var v = $('sm').value.trim(); if (v) cmd({ a: 'stage', text: v }); };
+    $('b-smclr').onclick = function () { $('sm').value = ''; cmd({ a: 'stage', text: '' }); };
+    [].forEach.call(document.querySelectorAll('#smq .btn'), function (b) { b.onclick = function () { cmd({ a: 'stage', text: b.textContent }); }; });
+    $('tabs').addEventListener('click', function (e) {
+      var b = e.target.closest('.tab'); if (!b) return;
+      [].forEach.call(document.querySelectorAll('.tab'), function (x) { x.classList.toggle('on', x === b); });
+      [].forEach.call(document.querySelectorAll('.panel'), function (x) { x.classList.toggle('on', x.id === 'p-' + b.dataset.p); });
+      musicTab = b.dataset.p === 'musica';
+      if (musicTab) send({ a: 'm.sync', m: 1 });
+    });
+    $('unpair').onclick = function (e) { e.preventDefault(); if (confirm('¿Desemparejar este celular?')) { try { localStorage.removeItem(KEY); } catch (x) { /* noop */ } location.reload(); } };
+
+    // ---- que la pantalla del celular no se apague mientras controlas
+    var lock = null;
+    function wake() { try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (l) { lock = l; }).catch(function () {}); } catch (e) { /* noop */ } }
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { wake(); send({ a: 'hello', m: musicTab ? 1 : 0 }); } });
+    document.addEventListener('click', function once() { wake(); document.removeEventListener('click', once); });
+  })();
+  </script>
+</body>
+</html>
