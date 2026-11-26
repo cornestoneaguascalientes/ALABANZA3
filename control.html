@@ -226,7 +226,7 @@
         var limited = !!(e && e.status === 429), retry = !(e && e.status) || limited || (e && e.status >= 500);
         if (retry && it.tries <= 7) {
           setWaiting(true);
-          setTimeout(function () { busy = false; pump(); }, Math.max(1500, ((e && e.retryAfter) || 0) * 1000, 1500 * it.tries));
+          setTimeout(function () { busy = false; pump(); }, Math.max(8000 + 4000 * it.tries, ((e && e.retryAfter) || 0) * 1000));   // si ntfy limita, se espera más: insistir lo alarga
           return;
         }
         var i = Q.indexOf(it); if (i >= 0) Q.splice(i, 1);
