@@ -9,7 +9,13 @@
  *  - El celular manda órdenes (siguiente, anterior, negro, versículo…); la computadora responde con lo que se proyecta.
  *  - El QR se dibuja aquí mismo (sin servicios externos), para que el código secreto nunca salga de la computadora.
  *
- * Lo usan: la consola (host + ventana del QR) y control.html (solo Relay).
+ * NUEVO · Conexión directa (WebRTC):
+ *  - Al emparejar, el celular le manda una "oferta" a la computadora por ntfy y ella contesta por ntfy (2 mensajes en total).
+ *    Con eso se abre un canal directo celular ↔ computadora. Desde ese momento todo viaja por ahí: sin límites de mensajes y casi instantáneo.
+ *  - ntfy queda como RESPALDO: si la red no deja conectar directo (WiFi con aislamiento, etc.) o el canal se cae, todo sigue
+ *    funcionando como antes por ntfy, y se vuelve a intentar el canal directo en segundo plano.
+ *
+ * Lo usan: la consola (host + ventana del QR) y control.html (Relay + Direct).
  */
 (function (root) {
   'use strict';
@@ -62,6 +68,111 @@
       return { close() { dead = true; clearTimeout(retry); if (es) es.close(); } };
     }
   };
+
+  // ============================================================
+  // Direct: canal directo celular ↔ computadora (WebRTC DataChannel).
+  // ntfy solo sirve para el "saludo" (oferta y respuesta). Después los mensajes viajan por el canal.
+  // Si no conecta o se cae, quien lo usa sigue por ntfy (respaldo).
+  // ============================================================
+  const Direct = (function () {
+    // Servidores STUN públicos (solo ayudan a descubrir la dirección; los datos NO pasan por ellos).
+    // Si algún día hace falta un TURN para alguna red difícil, se agrega aquí: Proy.Remote.Direct.ICE.servers.push({ urls, username, credential })
+    const ICE = { servers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }, { urls: 'stun:stun.cloudflare.com:3478' }] };
+    const supported = () => typeof RTCPeerConnection !== 'undefined';
+    const isCand = (l) => l.indexOf('a=candidate:') === 0;
+
+    // Un mensaje de ntfy admite ~4 KB: se recorta el SDP a los mejores candidatos para que siempre quepa
+    function rank(l) {
+      const addr = l.split(' ')[4] || '', v6 = addr.indexOf(':') >= 0, t = / typ (\w+)/.exec(l), k = t ? t[1] : 'host';
+      if (k === 'relay') return 0;
+      if (k === 'srflx') return v6 ? 3 : 1;
+      return v6 ? 4 : 2;
+    }
+    function slim(sdp, max) {
+      const lines = sdp.split(/\r?\n/).filter(Boolean);
+      const keep = new Set(lines.filter(isCand).map((l, i) => ({ l, i, r: rank(l) })).sort((a, b) => a.r - b.r || a.i - b.i).slice(0, max).map((c) => c.l));
+      return lines.filter((l) => !isCand(l) || keep.has(l)).join('\r\n') + '\r\n';
+    }
+    /** Devuelve el SDP recortado para que el mensaje completo (base + sdp) quepa en ntfy, o null si no cabe */
+    function fit(sdp, base) {
+      for (const n of [8, 5, 3, 2]) {
+        const s = slim(sdp, n);
+        if (byteLen(JSON.stringify(Object.assign({}, base, { sdp: s }))) <= 3800) return s;
+      }
+      return null;
+    }
+    // Espera a que se junten las direcciones (sin "trickle": así oferta y respuesta son un solo mensaje cada una)
+    function gathered(pc, ms) {
+      return new Promise((res) => {
+        if (pc.iceGatheringState === 'complete') { res(); return; }
+        let t = null;
+        const chk = () => { if (pc.iceGatheringState === 'complete') done(); };
+        const done = () => { pc.removeEventListener('icegatheringstatechange', chk); clearTimeout(t); res(); };
+        t = setTimeout(done, ms || 3500);
+        pc.addEventListener('icegatheringstatechange', chk);
+      });
+    }
+
+    /**
+     * role: 'phone' (crea el canal y la oferta) | 'host' (recibe el canal y contesta)
+     * cb: { onOpen(peer), onMsg(obj, peer), onClose(motivo, llegóAAbrir) }
+     * peer: { open, send(obj), close(motivo), pc }
+     */
+    function createPeer(role, cb) {
+      const pc = new RTCPeerConnection({ iceServers: ICE.servers });
+      let dc = null, opened = false, closed = false, lastRx = Date.now(), watch = null, boot = null;
+      const peer = {
+        pc, role,
+        get open() { return !closed && !!dc && dc.readyState === 'open'; },
+        send(obj) { if (!peer.open) return false; try { dc.send(JSON.stringify(obj)); return true; } catch (e) { return false; } },
+        close(why) {
+          if (closed) return;
+          closed = true; clearInterval(watch); clearTimeout(boot);
+          try { if (dc) dc.close(); } catch (e) { /* noop */ }
+          try { pc.close(); } catch (e) { /* noop */ }
+          if (cb.onClose) cb.onClose(why || '', opened);
+        }
+      };
+      function wire(ch) {
+        dc = ch;
+        ch.onopen = () => {
+          if (opened || closed) return;
+          opened = true; lastRx = Date.now(); clearTimeout(boot);
+          watch = setInterval(() => { if (Date.now() - lastRx > 15000) peer.close('sin señal'); }, 3000);    // el celular manda un latido cada 4 s
+          if (cb.onOpen) cb.onOpen(peer);
+        };
+        ch.onmessage = (ev) => {
+          lastRx = Date.now();
+          let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+          if (cb.onMsg) cb.onMsg(m, peer);
+        };
+        ch.onclose = () => peer.close('canal cerrado');
+        if (ch.readyState === 'open') ch.onopen();
+      }
+      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') peer.close('conexión ' + pc.connectionState); };
+      if (role === 'phone') wire(pc.createDataChannel('ctl', { ordered: true }));
+      else pc.ondatachannel = (ev) => wire(ev.channel);
+      boot = setTimeout(() => { if (!opened) peer.close('no conectó a tiempo'); }, 25000);
+      return peer;
+    }
+
+    function makeOffer(peer) {
+      return peer.pc.createOffer()
+        .then((o) => peer.pc.setLocalDescription(o))
+        .then(() => gathered(peer.pc))
+        .then(() => peer.pc.localDescription.sdp);
+    }
+    function acceptOffer(peer, sdp) {
+      return peer.pc.setRemoteDescription({ type: 'offer', sdp })
+        .then(() => peer.pc.createAnswer())
+        .then((a) => peer.pc.setLocalDescription(a))
+        .then(() => gathered(peer.pc))
+        .then(() => peer.pc.localDescription.sdp);
+    }
+    function acceptAnswer(peer, sdp) { return peer.pc.setRemoteDescription({ type: 'answer', sdp }); }
+
+    return { ICE, supported, createPeer, makeOffer, acceptOffer, acceptAnswer, fit, slim };
+  })();
 
   // ============================================================
   // QR (modo bytes, corrección M, versiones 1 a 12). Sin dependencias.
@@ -237,8 +348,8 @@
   // Configuración guardada (código secreto, servidor, si está activado)
   // ============================================================
   function loadCfg() {
-    try { const c = JSON.parse(localStorage.getItem(STORE)); if (c && c.token) return Object.assign({ server: DEFAULT_SERVER, enabled: false }, c); } catch (e) { /* noop */ }
-    return { token: newToken(), server: DEFAULT_SERVER, enabled: false };
+    try { const c = JSON.parse(localStorage.getItem(STORE)); if (c && c.token) return Object.assign({ server: DEFAULT_SERVER, enabled: false, direct: true }, c); } catch (e) { /* noop */ }
+    return { token: newToken(), server: DEFAULT_SERVER, enabled: false, direct: true };
   }
   function saveCfg(c) { try { localStorage.setItem(STORE, JSON.stringify(c)); } catch (e) { /* noop */ } }
 
@@ -296,24 +407,30 @@
   // ============================================================
   // Host: vive en la consola. Escucha órdenes del celular y le manda el estado.
   // api: { C: controlador, bible(q, modo), bibleMore(), staged(), outputs() }
+  // Los mensajes salen por el canal directo si está abierto; si no, por ntfy (respaldo).
   // ============================================================
   function createHost(api) {
     const C = api.C;
-    let cfg = loadCfg(), sub = null, offChange = null, hb = null, trail = null, lastPush = 0, phoneAt = 0, relayOk = false;
+    let cfg = loadCfg(), sub = null, offChange = null, hb = null, trail = null, lastPush = 0, phoneAt = 0, relayOk = false, peer = null;
     let musicWantAt = 0, musicKey = '', musicTrail = null, musicLast = 0, musicTimer = null, musicQuietUntil = 0, sKey = '', retryT = null;
     const seen = new Set(), listeners = new Set();
     const T = () => topics(cfg.token);
 
-    const status = () => ({ enabled: cfg.enabled, relay: relayOk, phone: Date.now() - phoneAt < 150000, server: cfg.server });
+    const isDirect = () => !!(peer && peer.open);
+    const status = () => ({ enabled: cfg.enabled, relay: relayOk, direct: isDirect(), phone: isDirect() || Date.now() - phoneAt < 150000, server: cfg.server });
     const emitStatus = () => listeners.forEach((fn) => { try { fn(status()); } catch (e) { /* noop */ } });
-    const send = (obj) => Relay.publish(cfg.server, T().st, obj).catch((e) => {
-      if (e && e.status === 429) {                                         // servicio ocupado: se vuelve a mandar el estado más reciente después
-        clearTimeout(retryT);
-        retryT = setTimeout(() => { sKey = ''; musicKey = ''; push(true, true); pushMusic(true, true); }, Math.max(4000, (e.retryAfter || 0) * 1000));
-        return;
-      }
-      relayOk = false; emitStatus();
-    });
+    const closePeer = (why) => { const p = peer; peer = null; if (p) p.close(why); };
+    const send = (obj) => {
+      if (isDirect() && peer.send(obj)) return Promise.resolve();          // canal directo: sin límites
+      return Relay.publish(cfg.server, T().st, obj).catch((e) => {
+        if (e && e.status === 429) {                                         // servicio ocupado: se vuelve a mandar el estado más reciente después
+          clearTimeout(retryT);
+          retryT = setTimeout(() => { sKey = ''; musicKey = ''; push(true, true); pushMusic(true, true); }, Math.max(4000, (e.retryAfter || 0) * 1000));
+          return;
+        }
+        relayOk = false; emitStatus();
+      });
+    };
 
     const plain = (s) => {
       if (!s) return '';
@@ -360,7 +477,7 @@
       if (!cfg.enabled) return;
       const now = Date.now();
       clearTimeout(trail);
-      const wait = 1200 - (now - lastPush);               // máximo un estado cada ~1.2 s
+      const wait = (isDirect() ? 150 : 1200) - (now - lastPush);      // directo: ~7 por segundo · ntfy: máximo uno cada ~1.2 s
       if (!skipThrottle && wait > 0) { trail = setTimeout(() => push(true, always), wait); return; }
       const st = buildState();
       const key = JSON.stringify(st, (k, v) => (k === 'r' ? undefined : v));     // lo que falta de la cuenta cambia siempre: no cuenta
@@ -378,24 +495,25 @@
       const st = Music.state();
       const key = JSON.stringify(st, (k, v) => (k === 'pos' ? undefined : v));       // la posición cambia siempre: no cuenta como "cambio"
       if (!always && key === musicKey) return;
-      const wait = 1000 - (Date.now() - musicLast);
+      const wait = (isDirect() ? 250 : 1000) - (Date.now() - musicLast);
       if (!skipThrottle && wait > 0) { musicTrail = setTimeout(() => pushMusic(true, always), wait); return; }
       musicKey = key; musicLast = Date.now();
       send(st);
     }
     const note = (text, err) => { if (cfg.enabled) send({ t: 'n', text: String(text || ''), err: !!err }); };
 
+    /** raw: mensaje de ntfy (llega por el respaldo). Si viene del canal directo, raw es null. */
     function onCmd(m, raw) {
       if (!m || m.t !== 'c' || !cfg.enabled) return;
       const id = raw && raw.id;
       if (id) { if (seen.has(id)) return; seen.add(id); if (seen.size > 300) seen.delete(seen.values().next().value); }
       if (raw && raw.time && Date.now() / 1000 - raw.time > 30) return;     // orden vieja (p. ej. al reconectar)
-      phoneAt = Date.now(); relayOk = true; emitStatus();
+      phoneAt = Date.now(); if (raw) relayOk = true; emitStatus();
       if (m.m) musicWantAt = Date.now();                       // el celular está viendo la pestaña Música
       try {
         if (typeof m.a === 'string' && /^(mt|pad|met|m)\./.test(m.a)) {
           Music.cmd(m);
-          if (/^(mt\.vol|pad\.vol|met\.vol|met\.bpm)$/.test(m.a)) musicQuietUntil = Date.now() + 2500; else pushMusic(true, m.a === 'm.sync');
+          if (/^(mt\.vol|pad\.vol|met\.vol|met\.bpm)$/.test(m.a)) musicQuietUntil = Date.now() + (isDirect() ? 0 : 2500); else pushMusic(true, m.a === 'm.sync');
           return;
         }
         switch (m.a) {
@@ -416,12 +534,42 @@
       } catch (e) { note('Error en la computadora: ' + (e && e.message), true); }
     }
 
+    /** El celular manda una oferta de conexión directa (por ntfy). Se contesta por ntfy y se abre el canal. */
+    function onSignal(m, raw) {
+      if (!cfg.enabled || cfg.direct === false || !Direct.supported() || m.k !== 'offer' || typeof m.sdp !== 'string') return;
+      const rid = raw && raw.id;
+      if (rid) { if (seen.has(rid)) return; seen.add(rid); }
+      if (raw && raw.time && Date.now() / 1000 - raw.time > 40) return;
+      phoneAt = Date.now(); relayOk = true;
+      const oid = String(m.id || '').slice(0, 24);
+      closePeer('nueva oferta');                                  // una sola conexión directa a la vez: la última oferta gana
+      const p = Direct.createPeer('host', {
+        onOpen() { sKey = ''; musicKey = ''; emitStatus(); push(true, true); pushMusic(true, true); },
+        onMsg(msg) { if (msg && msg.a === 'ping') p.send({ t: 'p' }); onCmd(msg, null); },
+        onClose() {
+          if (peer !== p) return;                                 // la cerramos nosotros a propósito
+          peer = null; sKey = ''; musicKey = ''; emitStatus();    // se cayó: se sigue por ntfy
+          if (cfg.enabled && Date.now() - phoneAt < 150000) { push(true, true); pushMusic(true, true); }
+        }
+      });
+      peer = p;
+      Direct.acceptOffer(p, m.sdp).then((sdp) => {
+        if (peer !== p) return;
+        const base = { t: 'r', k: 'answer', id: oid }, fit = Direct.fit(sdp, base);
+        if (!fit) throw new Error('SDP demasiado grande');
+        return Relay.publish(cfg.server, T().st, Object.assign({ sdp: fit }, base));
+      }).catch(() => { p.close('error al contestar'); });
+    }
+
     function start() {
       stop();
       if (!cfg.enabled) { emitStatus(); return; }
-      sub = Relay.subscribe(cfg.server, T().cmd, '', onCmd, (ok) => { relayOk = ok; emitStatus(); });
+      sub = Relay.subscribe(cfg.server, T().cmd, '', (m, raw) => (m && m.t === 'r' ? onSignal(m, raw) : onCmd(m, raw)), (ok) => { relayOk = ok; emitStatus(); });
       offChange = C.onChange(() => push());
-      hb = setInterval(() => { if (Date.now() - phoneAt < 300000) { push(true, true); pushMusic(true, true); } emitStatus(); }, 60000);   // latido cada minuto, solo si hay un celular
+      hb = setInterval(() => {                                      // latido por ntfy cada minuto, solo si hay un celular y NO hay canal directo
+        if (!isDirect() && Date.now() - phoneAt < 300000) { push(true, true); pushMusic(true, true); }
+        emitStatus();
+      }, 60000);
       musicTimer = setInterval(() => pushMusic(false), 1000);       // detecta cambios de música hechos en la computadora
       push(true, true);
       emitStatus();
@@ -429,6 +577,7 @@
     function stop() {
       if (sub) { sub.close(); sub = null; }
       if (offChange) { offChange(); offChange = null; }
+      closePeer('detenido');
       clearInterval(hb); clearInterval(musicTimer); clearTimeout(trail); clearTimeout(musicTrail); clearTimeout(retryT); relayOk = false;
     }
 
@@ -436,6 +585,7 @@
       cfg: () => cfg, status, push, note, start, stop,
       onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); },
       setEnabled(on) { cfg.enabled = !!on; saveCfg(cfg); if (cfg.enabled) start(); else { stop(); emitStatus(); } },
+      setDirect(on) { cfg.direct = !!on; saveCfg(cfg); if (!cfg.direct) closePeer('desactivado'); emitStatus(); },
       rotate() { cfg.token = newToken(); saveCfg(cfg); phoneAt = 0; if (cfg.enabled) start(); emitStatus(); },
       setServer(s) { cfg.server = Relay.base(s || DEFAULT_SERVER); saveCfg(cfg); if (cfg.enabled) start(); emitStatus(); },
       url() {
@@ -457,13 +607,14 @@
     dlg.className = 'pj-dlg';
     dlg.innerHTML =
       '<h3 style="margin:0 0 8px">📱 Control remoto desde el celular</h3>' +
-      '<p class="pj-help" style="margin-top:0">Abre la cámara del celular, apunta a este código y toca el enlace. Los dos (computadora y celular) necesitan internet. No hace falta que estén en la misma red.</p>' +
+      '<p class="pj-help" style="margin-top:0">Abre la cámara del celular, apunta a este código y toca el enlace. Los dos (computadora y celular) necesitan internet para emparejarse. Después, si la red lo permite, se conectan directo (más rápido y sin límites); si no, siguen por el servicio de mensajes.</p>' +
       '<div style="display:flex;justify-content:center;margin:10px 0"><canvas id="rm-qr" style="width:240px;height:240px;border-radius:8px;image-rendering:pixelated;max-width:100%"></canvas></div>' +
       '<div class="pj-row"><input class="pj-in" id="rm-url" readonly><button class="pj-btn sm" id="rm-copy" type="button">Copiar enlace</button></div>' +
       '<p class="pj-help" id="rm-status" style="font-weight:600"></p>' +
       '<label class="pj-chk"><input type="checkbox" id="rm-on"> Control remoto activado</label>' +
       '<p class="pj-help">⚠️ Quien tenga este código puede controlar tu proyección. No lo compartas. Si se filtra, toca «Nuevo código» y el anterior deja de funcionar.</p>' +
       '<details class="pj-add"><summary>Avanzado</summary>' +
+      '<label class="pj-chk"><input type="checkbox" id="rm-direct"> Conexión directa (WebRTC): más rápida y sin límites</label>' +
       '<label class="pj-fld">Servidor de mensajes (ntfy)<input class="pj-in" id="rm-server" placeholder="https://ntfy.sh"></label>' +
       '<div class="pj-row"><button class="pj-btn sm" id="rm-save" type="button">Guardar servidor</button><button class="pj-btn sm danger" id="rm-new" type="button">Nuevo código</button></div></details>' +
       '<div class="pj-row" style="justify-content:flex-end"><button class="pj-btn primary" id="rm-close" type="button">Cerrar</button></div>';
@@ -476,19 +627,22 @@
       $('rm-url').value = url;
       try { QR.draw($('rm-qr'), url, 6); } catch (e) { $('rm-qr').getContext('2d').clearRect(0, 0, 10, 10); $('rm-status').textContent = 'No se pudo dibujar el QR: usa el enlace.'; }
       $('rm-on').checked = host.cfg().enabled;
+      $('rm-direct').checked = host.cfg().direct !== false;
       $('rm-server').value = host.cfg().server;
       paintStatus(host.status());
     }
     function paintStatus(s) {
       const el = $('rm-status');
       if (!s.enabled) { el.textContent = '⏸ Desactivado'; el.style.color = ''; return; }
+      if (s.direct) { el.textContent = '🟢 Celular conectado · directo ⚡ (sin límites)'; el.style.color = '#3fb950'; return; }
       if (!s.relay) { el.textContent = '🔴 Sin conexión con el servicio de mensajes (revisa el internet de la computadora)'; el.style.color = '#ff6b6b'; return; }
-      el.textContent = s.phone ? '🟢 Celular conectado' : '🟡 Listo. Esperando que el celular escanee el código…';
+      el.textContent = s.phone ? '🟢 Celular conectado · por el servicio de mensajes (respaldo)' : '🟡 Listo. Esperando que el celular escanee el código…';
       el.style.color = s.phone ? '#3fb950' : '';
     }
     off = host.onStatus((s) => { if (dlg.open) paintStatus(s); });
     $('rm-copy').onclick = () => { $('rm-url').select(); try { navigator.clipboard.writeText($('rm-url').value); $('rm-copy').textContent = '¡Copiado!'; setTimeout(() => { $('rm-copy').textContent = 'Copiar enlace'; }, 1500); } catch (e) { document.execCommand('copy'); } };
     $('rm-on').onchange = (e) => { host.setEnabled(e.target.checked); paint(); };
+    $('rm-direct').onchange = (e) => { host.setDirect(e.target.checked); paint(); };
     $('rm-save').onclick = () => { host.setServer($('rm-server').value.trim()); paint(); };
     $('rm-new').onclick = () => { if (confirm('Se crea un código nuevo y el celular conectado tendrá que escanear otra vez. ¿Continuar?')) { host.rotate(); paint(); } };
     $('rm-close').onclick = () => dlg.close();
@@ -497,6 +651,6 @@
     dlg.showModal();
   }
 
-  Proy.Remote = { Relay, QR, Music, createHost, openDialog, loadCfg, saveCfg, topics, newToken, DEFAULT_SERVER, clip };
+  Proy.Remote = { Relay, Direct, QR, Music, createHost, openDialog, loadCfg, saveCfg, topics, newToken, DEFAULT_SERVER, clip };
   if (typeof module !== 'undefined' && module.exports) module.exports = Proy.Remote;
 })(typeof window !== 'undefined' ? window : globalThis);
