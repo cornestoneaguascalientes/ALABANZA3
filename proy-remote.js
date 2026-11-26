@@ -36,7 +36,7 @@
     base: (server) => String(server || DEFAULT_SERVER).replace(/\/+$/, ''),
     publish(server, topic, obj) {
       return fetch(Relay.base(server) + '/' + topic, { method: 'POST', body: JSON.stringify(obj) })
-        .then((r) => { if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; throw e; } return true; });
+        .then((r) => { if (!r.ok) { const e = new Error('HTTP ' + r.status); e.status = r.status; e.retryAfter = Number(r.headers.get('Retry-After')) || 0; throw e; } return true; });
     },
     /** since: '' (solo lo nuevo) | 'latest' (el último guardado + lo nuevo). onMsg(cuerpo, mensajeNtfy). onStatus(true|false) */
     subscribe(server, topic, since, onMsg, onStatus) {
@@ -300,13 +300,20 @@
   function createHost(api) {
     const C = api.C;
     let cfg = loadCfg(), sub = null, offChange = null, hb = null, trail = null, lastPush = 0, phoneAt = 0, relayOk = false;
-    let musicWantAt = 0, musicKey = '', musicTrail = null, musicLast = 0, musicTimer = null;
+    let musicWantAt = 0, musicKey = '', musicTrail = null, musicLast = 0, musicTimer = null, musicQuietUntil = 0, sKey = '', retryT = null;
     const seen = new Set(), listeners = new Set();
     const T = () => topics(cfg.token);
 
-    const status = () => ({ enabled: cfg.enabled, relay: relayOk, phone: Date.now() - phoneAt < 50000, server: cfg.server });
+    const status = () => ({ enabled: cfg.enabled, relay: relayOk, phone: Date.now() - phoneAt < 150000, server: cfg.server });
     const emitStatus = () => listeners.forEach((fn) => { try { fn(status()); } catch (e) { /* noop */ } });
-    const send = (obj) => Relay.publish(cfg.server, T().st, obj).catch(() => { relayOk = false; emitStatus(); });
+    const send = (obj) => Relay.publish(cfg.server, T().st, obj).catch((e) => {
+      if (e && e.status === 429) {                                         // servicio ocupado: se vuelve a mandar el estado más reciente después
+        clearTimeout(retryT);
+        retryT = setTimeout(() => { sKey = ''; musicKey = ''; push(true, true); pushMusic(true, true); }, Math.max(4000, (e.retryAfter || 0) * 1000));
+        return;
+      }
+      relayOk = false; emitStatus();
+    });
 
     const plain = (s) => {
       if (!s) return '';
@@ -348,25 +355,31 @@
       return st;
     }
 
-    function push(force) {
+    /** skipThrottle: no esperar el intervalo mínimo. always: mandarlo aunque no haya cambiado (saludo / latido) */
+    function push(skipThrottle, always) {
       if (!cfg.enabled) return;
       const now = Date.now();
       clearTimeout(trail);
-      const wait = 1200 - (now - lastPush);               // máximo un estado cada ~1.2 s (ntfy limita los mensajes por minuto)
-      if (!force && wait > 0) { trail = setTimeout(() => push(true), wait); return; }
-      lastPush = now;
-      send(buildState());
+      const wait = 1200 - (now - lastPush);               // máximo un estado cada ~1.2 s
+      if (!skipThrottle && wait > 0) { trail = setTimeout(() => push(true, always), wait); return; }
+      const st = buildState();
+      const key = JSON.stringify(st, (k, v) => (k === 'r' ? undefined : v));     // lo que falta de la cuenta cambia siempre: no cuenta
+      if (!always && key === sKey) return;                // nada cambió: no se gasta un mensaje
+      sKey = key; lastPush = now;
+      send(st);
     }
+
     // Música: se publica solo mientras el celular tiene abierta la pestaña Música (avisa con m:1 en cada ping)
-    const wantsMusic = () => Date.now() - musicWantAt < 60000;
-    function pushMusic(force) {
+    const wantsMusic = () => Date.now() - musicWantAt < 150000;
+    function pushMusic(skipThrottle, always) {
       if (!cfg.enabled || !wantsMusic()) return;
       clearTimeout(musicTrail);
+      if (!always && Date.now() < musicQuietUntil) return;          // mientras mueves volúmenes no se contesta cada paso; el siguiente cambio lo manda
       const st = Music.state();
       const key = JSON.stringify(st, (k, v) => (k === 'pos' ? undefined : v));       // la posición cambia siempre: no cuenta como "cambio"
-      if (!force && key === musicKey) return;
+      if (!always && key === musicKey) return;
       const wait = 1000 - (Date.now() - musicLast);
-      if (wait > 0) { musicTrail = setTimeout(() => pushMusic(true), wait); return; }
+      if (!skipThrottle && wait > 0) { musicTrail = setTimeout(() => pushMusic(true, always), wait); return; }
       musicKey = key; musicLast = Date.now();
       send(st);
     }
@@ -380,9 +393,13 @@
       phoneAt = Date.now(); relayOk = true; emitStatus();
       if (m.m) musicWantAt = Date.now();                       // el celular está viendo la pestaña Música
       try {
-        if (typeof m.a === 'string' && /^(mt|pad|met|m)\./.test(m.a)) { Music.cmd(m); pushMusic(true); return; }
+        if (typeof m.a === 'string' && /^(mt|pad|met|m)\./.test(m.a)) {
+          Music.cmd(m);
+          if (/^(mt\.vol|pad\.vol|met\.vol|met\.bpm)$/.test(m.a)) musicQuietUntil = Date.now() + 2500; else pushMusic(true, m.a === 'm.sync');
+          return;
+        }
         switch (m.a) {
-          case 'hello': push(true); pushMusic(true); break;
+          case 'hello': push(true, true); pushMusic(true, true); break;
           case 'next': C.next(); break;
           case 'prev': C.prev(); break;
           case 'nextItem': C.jumpItem(1); break;
@@ -404,15 +421,15 @@
       if (!cfg.enabled) { emitStatus(); return; }
       sub = Relay.subscribe(cfg.server, T().cmd, '', onCmd, (ok) => { relayOk = ok; emitStatus(); });
       offChange = C.onChange(() => push());
-      hb = setInterval(() => { push(true); pushMusic(true); emitStatus(); }, 20000);     // latido: el celular sabe que la computadora sigue ahí
+      hb = setInterval(() => { if (Date.now() - phoneAt < 300000) { push(true, true); pushMusic(true, true); } emitStatus(); }, 60000);   // latido cada minuto, solo si hay un celular
       musicTimer = setInterval(() => pushMusic(false), 1000);       // detecta cambios de música hechos en la computadora
-      push(true);
+      push(true, true);
       emitStatus();
     }
     function stop() {
       if (sub) { sub.close(); sub = null; }
       if (offChange) { offChange(); offChange = null; }
-      clearInterval(hb); clearInterval(musicTimer); clearTimeout(trail); clearTimeout(musicTrail); relayOk = false;
+      clearInterval(hb); clearInterval(musicTimer); clearTimeout(trail); clearTimeout(musicTrail); clearTimeout(retryT); relayOk = false;
     }
 
     const host = {
