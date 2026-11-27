@@ -13,6 +13,7 @@
   <style>
     :root { --bg: #000; --s1: #121214; --s2: #1c1c20; --line: #2a2a30; --fg: #f4f4f5; --muted: #9a9aa3; --red: #e5484d; --green: #3fb950; --amber: #ffb224; --blue: #6e9bff; }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    [hidden] { display: none !important; }
     html, body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; touch-action: manipulation; }
     body { min-height: 100vh; padding: env(safe-area-inset-top) env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + 24px) env(safe-area-inset-left); max-width: 640px; margin: 0 auto; }
     button { font: inherit; color: inherit; cursor: pointer; }
@@ -160,6 +161,12 @@
       <div class="seekrow"><span id="m-time">0:00 / 0:00</span><input type="range" id="m-seek" min="0" max="1000" value="0"></div>
       <div class="two"><button class="btn" id="m-pd" type="button">Tono −1</button><button class="btn" id="m-pu" type="button">Tono +1</button></div>
       <div class="seg" id="m-mode"><button class="btn" data-mode="stereo" type="button">Estéreo</button><button class="btn" data-mode="split" type="button">Split L/R</button></div>
+      <h4>Letras con la secuencia</h4>
+      <button class="btn block" id="sq-follow" type="button">🎵 Las letras siguen la secuencia: NO</button>
+      <div class="two" id="sq-norec"><button class="btn" id="sq-rec" type="button">● Grabar tiempos</button><button class="btn danger" id="sq-clear" type="button">Borrar tiempos</button></div>
+      <div class="two" id="sq-recbar" hidden><button class="btn primary" id="sq-save" type="button">■ Terminar y guardar</button><button class="btn" id="sq-cancel" type="button">Cancelar</button></div>
+      <p class="help" id="sq-info"></p>
+
       <h4>Mezcla</h4>
       <div id="m-mixer"><p class="help">Carga una canción para ver sus pistas.</p></div>
 
@@ -425,6 +432,12 @@
           row.classList.toggle('silent', anySolo ? !t[5] : !!t[4]);
         });
       }
+      if (s.sq) {
+        var q = s.sq;
+        $('sq-follow').textContent = '🎵 Las letras siguen la secuencia: ' + (q.f ? 'SÍ' : 'NO'); $('sq-follow').classList.toggle('primary', !!q.f);
+        $('sq-norec').hidden = !!q.r; $('sq-recbar').hidden = !q.r;
+        $('sq-info').textContent = (q.msg ? q.msg + ' ' : '') + (q.r ? 'Grabando: ' + q.c + ' cambios. Pasa las diapositivas con «Siguiente» cuando empiece cada parte (graba mejor desde la computadora: aquí hay un pequeño retraso).' : q.m ? (q.ok ? '✓ ' + q.m + ' cambios guardados para esta canción.' : '⚠ Los tiempos son de otra división de diapositivas: vuelve a grabarlos.') : (q.l ? 'Esta canción todavía no tiene tiempos.' : 'Carga una canción de la biblioteca en la secuencia.'));
+      }
       if (s.pad) {
         $('pad-toggle').classList.toggle('on', !!s.pad.on); $('pad-toggle').textContent = (s.pad.on ? '■ Pad ' : '▶ Pad ') + s.pad.tone;
         if (!drag.pad) $('pad-vol').value = s.pad.vol;
@@ -452,6 +465,11 @@
     $('m-mode').addEventListener('click', function (e) { var b = e.target.closest('[data-mode]'); if (b) cmd({ a: 'mt.mode', mode: b.dataset.mode }); });
     $('m-seek').addEventListener('pointerdown', function () { seeking = true; });
     $('m-seek').addEventListener('change', function (e) { cmd({ a: 'mt.seek', f: Number(e.target.value) / 1000 }); setTimeout(function () { seeking = false; }, 600); });
+    $('sq-follow').onclick = function () { cmd({ a: 'sq.follow', on: MS && MS.sq && MS.sq.f ? 0 : 1 }); };
+    $('sq-rec').onclick = function () { cmd({ a: 'sq.rec' }); };
+    $('sq-save').onclick = function () { cmd({ a: 'sq.save' }); };
+    $('sq-cancel').onclick = function () { cmd({ a: 'sq.cancel' }); };
+    $('sq-clear').onclick = function () { if (confirm('¿Borrar los tiempos de esta canción?')) cmd({ a: 'sq.clear' }); };
     $('pad-toggle').onclick = function () { cmd({ a: 'pad.toggle' }); };
     KEYS.forEach(function (k) { var b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.dataset.k = k; b.textContent = k; b.onclick = function () { cmd({ a: 'pad.tone', tone: k }); }; $('pad-keys').appendChild(b); });
     $('pad-vol').addEventListener('input', function (e) { drag.pad = 1; slideSend('pv', { a: 'pad.vol', v: Number(e.target.value) }); });
