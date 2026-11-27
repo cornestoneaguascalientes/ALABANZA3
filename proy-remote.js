@@ -368,6 +368,7 @@
           out.met = { on: root.Metronome.isPlaying() ? 1 : 0, bpm: root.Metronome.getBPM(), n: m.beats, d: m.den, vol: Math.round(root.Metronome.getVolume() * 100) };
         }
       } catch (e) { /* noop */ }
+      try { const S = root.Proy && root.Proy.SeqSync && root.Proy.SeqSync.instance; if (S) out.sq = S.brief(); } catch (e) { /* noop */ }
       if (out.mt) {                                    // límite de ~4 KB por mensaje
         out.mt.list = out.mt.list.map((x) => [x[0], clip(x[1], 28)]);
         out.mt.title = clip(out.mt.title, 40); out.mt.msg = clip(out.mt.msg, 80); out.mt.badge = clip(out.mt.badge, 40);
@@ -398,6 +399,16 @@
         case 'met.bpm': if (root.Metronome) root.Metronome.setBPM(num(m.v, 40, 240)); return true;
         case 'met.tap': if (root.Metronome) root.Metronome.tapTempo(); return true;
         case 'met.vol': if (root.Metronome) root.Metronome.setVolume(num(m.v, 0, 100) / 100); return true;
+        case 'sq.follow': case 'sq.rec': case 'sq.save': case 'sq.cancel': case 'sq.clear': {
+          const S = root.Proy && root.Proy.SeqSync && root.Proy.SeqSync.instance;
+          if (!S) return true;
+          if (a === 'sq.follow') S.setFollow(!!m.on);
+          else if (a === 'sq.rec') S.startRec();
+          else if (a === 'sq.save') S.stopRec(true);
+          else if (a === 'sq.cancel') S.stopRec(false);
+          else S.clearMarks();
+          return true;
+        }
         case 'm.sync': return true;
         default: return false;
       }
@@ -412,7 +423,7 @@
   function createHost(api) {
     const C = api.C;
     let cfg = loadCfg(), sub = null, offChange = null, hb = null, trail = null, lastPush = 0, phoneAt = 0, relayOk = false, peer = null, limitUntil = 0, limitStep = 0;
-    let musicWantAt = 0, musicKey = '', musicTrail = null, musicLast = 0, musicTimer = null, musicQuietUntil = 0, sKey = '', retryT = null;
+    let musicWantAt = 0, musicKey = '', musicTrail = null, musicLast = 0, musicTimer = null, musicQuietUntil = 0, sKey = '', retryT = null, offSeq = null;
     const seen = new Set(), listeners = new Set();
     const T = () => topics(cfg.token);
 
@@ -516,7 +527,7 @@
       phoneAt = Date.now(); if (raw) relayOk = true; emitStatus();
       if (m.m) musicWantAt = Date.now();                       // el celular está viendo la pestaña Música
       try {
-        if (typeof m.a === 'string' && /^(mt|pad|met|m)\./.test(m.a)) {
+        if (typeof m.a === 'string' && /^(mt|pad|met|sq|m)\./.test(m.a)) {
           Music.cmd(m);
           if (/^(mt\.vol|pad\.vol|met\.vol|met\.bpm)$/.test(m.a)) musicQuietUntil = Date.now() + (isDirect() ? 0 : 2500); else pushMusic(true, m.a === 'm.sync');
           return;
@@ -571,6 +582,8 @@
       if (!cfg.enabled) { emitStatus(); return; }
       sub = Relay.subscribe(cfg.server, T().cmd, '', (m, raw) => (m && m.t === 'r' ? onSignal(m, raw) : onCmd(m, raw)), (ok) => { relayOk = ok; emitStatus(); });
       offChange = C.onChange(() => push());
+      const SS = root.Proy && root.Proy.SeqSync && root.Proy.SeqSync.instance;       // las letras que siguen a la secuencia también avisan al celular
+      if (SS) offSeq = SS.onChange(() => pushMusic(false));
       hb = setInterval(() => {                                      // latido por ntfy cada minuto, solo si hay un celular y NO hay canal directo
         if (!isDirect() && Date.now() - phoneAt < 300000) { push(true, true); pushMusic(true, true); }
         emitStatus();
@@ -582,6 +595,7 @@
     function stop() {
       if (sub) { sub.close(); sub = null; }
       if (offChange) { offChange(); offChange = null; }
+      if (offSeq) { offSeq(); offSeq = null; }
       closePeer('detenido');
       clearInterval(hb); clearInterval(musicTimer); clearTimeout(trail); clearTimeout(musicTrail); clearTimeout(retryT); relayOk = false;
     }
