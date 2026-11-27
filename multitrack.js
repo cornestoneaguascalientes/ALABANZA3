@@ -877,6 +877,8 @@
       const f = document.querySelector('#mt-mixer [data-ch="' + id + '"] .mt-fader');
       if (f && mix[id]) f.value = mix[id].vol;  // el fader de la pantalla se mueve igual
     },
+    /** Consulta ligera (se usa varias veces por segundo): solo lo necesario para sincronizar las letras */
+    quick() { return { id: song ? String(song.id) : '', title: song ? String(song.title || '') : '', ready, playing, pos: position(), dur: duration }; },
     mute: toggleMute, solo: toggleSolo, pitch: nudge, mode: setMode, play, pause, stop,
     seekFraction(f) { if (ready && duration) seek(clamp(f, 0, 1) * duration); }
   };
