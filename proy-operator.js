@@ -32,7 +32,7 @@
   // Plantilla
   // ============================================================
   function template() {
-    const tabs = [['songs', 'Canciones'], ['bible', 'Biblia'], ['media', 'Media'], ['settings', 'Ajustes'], ['data', 'Datos']];
+    const tabs = [['songs', 'Canciones'], ['bible', 'Biblia'], ['media', 'Media'], ['seq', 'Secuencia'], ['settings', 'Ajustes'], ['data', 'Datos']];
     return `
 <div class="pj">
   <div class="pj-bar">
@@ -43,6 +43,7 @@
     <button class="pj-btn" id="pj-open-lower" type="button">Lower Third (OBS)</button>
     <button class="pj-btn" id="pj-open-stage" type="button">Vista de escenario</button>
     <button class="pj-btn" id="pj-remote" type="button">📱 Control remoto</button>
+    <button class="pj-btn" id="pj-seq-quick" type="button" title="Las diapositivas cambian solas al ritmo de la secuencia">🎵 Seguir secuencia</button>
   </div>
 
   <div class="pj-quick">
@@ -132,6 +133,8 @@
         <div class="pj-thumbs" id="pj-thumbs"></div>
         <p class="pj-help">Los archivos se guardan en este navegador y funcionan sin internet.</p>
       </div>
+
+      <div class="pj-panel" data-p="seq"><div id="pj-seq-panel"></div></div>
 
       <div class="pj-panel" data-p="settings">
         <div class="pj-h">Texto</div>
@@ -349,16 +352,17 @@
   }
 
   let remote = null;
-  function loadRemoteScript() {
-    if (P.Remote) return Promise.resolve(P.Remote);
+  function loadScript(src, ready) {
+    if (ready()) return Promise.resolve(ready());
     return new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = 'proy-remote.js';
-      s.onload = () => res(P.Remote);
-      s.onerror = () => rej(new Error('No se pudo cargar proy-remote.js (¿lo subiste a tu sitio?)'));
+      s.src = src;
+      s.onload = () => res(ready());
+      s.onerror = () => rej(new Error('No se pudo cargar ' + src + ' (¿lo subiste a tu sitio?)'));
       document.head.appendChild(s);
     });
   }
+  const loadRemoteScript = () => loadScript('proy-remote.js', () => P.Remote);
   async function ensureRemote() {
     if (remote) return remote;
     const R = await loadRemoteScript();
@@ -925,6 +929,23 @@
     $('pj-remote').onclick = async () => {
       try { const h = await ensureRemote(); P.Remote.openDialog(h); } catch (e) { toast(e.message, 'error'); }
     };
+    // Las diapositivas siguen a la secuencia (módulo aparte: proy-seqsync.js)
+    loadScript('proy-seqsync.js', () => P.SeqSync).then((S) => {
+      const sync = S.create({
+        C,
+        itemFor: (id) => C.service.items.findIndex((it) => it.type === 'song' && it.meta && it.meta.songId === 'lib-' + id),
+        quickFor: (id) => {
+          const s = Database.getSongById(id);
+          return s ? Items.song({ id: 'lib-' + s.id, source: 'library', title: s.title, key: s.originalKey, lyrics: s.lyrics }, songOpts()) : null;
+        },
+        toast
+      });
+      S.instance = sync;
+      sync.mount($('pj-seq-panel'));
+      const btn = $('pj-seq-quick'), paintBtn = () => btn.classList.toggle('on', sync.isFollowing() || sync.isRecording());
+      sync.onChange(paintBtn); paintBtn();
+      btn.onclick = () => sync.setFollow(!sync.isFollowing());
+    }).catch((e) => { $('pj-seq-quick').hidden = true; console.error(e); });
     try {                                                   // si ya estaba activado, se reconecta solo al abrir la app
       const rc = JSON.parse(localStorage.getItem('alabanza.remote.v1'));
       if (rc && rc.enabled) ensureRemote().then((h) => h.start()).catch(() => {});
